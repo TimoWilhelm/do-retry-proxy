@@ -30,12 +30,10 @@ const DEFAULT_OPTIONS: Required<Omit<RetryOptions, 'isRetryable'>> = {
  * - `.retryable` must be true
  * - `.overloaded` must NOT be true (retrying would worsen the overload)
  */
-export function isErrorRetryable(err: unknown): boolean {
+function isErrorRetryable(err: unknown): boolean {
 	const e = err as Record<string, unknown>;
 	const msg = String(err);
-	return (
-		Boolean(e?.retryable) && !Boolean(e?.overloaded) && !msg.includes('Durable Object is overloaded')
-	);
+	return Boolean(e?.retryable) && !Boolean(e?.overloaded) && !msg.includes('Durable Object is overloaded');
 }
 
 /**
@@ -56,7 +54,7 @@ type StubGetter<T extends Rpc.DurableObjectBranded> = () => DurableObjectStub<T>
  */
 function createStubProxy<T extends Rpc.DurableObjectBranded>(
 	getStub: StubGetter<T>,
-	options: Required<Omit<RetryOptions, 'isRetryable'>> & { isRetryable: (err: unknown) => boolean }
+	options: Required<Omit<RetryOptions, 'isRetryable'>> & { isRetryable?: (err: unknown) => boolean },
 ): DurableObjectStub<T> {
 	const stub = getStub();
 
@@ -77,17 +75,26 @@ function createStubProxy<T extends Rpc.DurableObjectBranded>(
 			return async (...args: unknown[]) => {
 				let attempt = 1;
 				let lastError: unknown;
+				let useSameStub = true;
 
 				while (attempt <= options.maxAttempts) {
 					try {
-						// Get a fresh stub for each attempt (critical for broken stub recovery)
-						const currentStub = attempt === 1 ? target : getStub();
+						// Get a fresh stub if needed, otherwise reuse
+						// On attempt 1, 'target' is the initial stub.
+						const currentStub = useSameStub ? target : getStub();
 						return await (currentStub as Record<string, (...a: unknown[]) => unknown>)[prop](...args);
 					} catch (err) {
 						lastError = err;
 
 						// Check if we should retry
-						if (!options.isRetryable(err)) {
+						// 1. Always retry infrastructure errors (unless overloaded)
+						if (isErrorRetryable(err)) {
+							// continue to retry logic
+						}
+						// 2. Check custom predicate if provided
+						else if (options.isRetryable && options.isRetryable(err)) {
+							// continue to retry logic
+						} else {
 							throw err;
 						}
 
@@ -95,6 +102,12 @@ function createStubProxy<T extends Rpc.DurableObjectBranded>(
 						if (attempt >= options.maxAttempts) {
 							throw err;
 						}
+
+						// Determine if we can reuse the stub for the next attempt
+						// If the error was remote (application error), the stub is likely healthy.
+						// If it was infrastructure/network, assume broken and recreate.
+						const isRemote = (err as any)?.remote;
+						useSameStub = Boolean(isRemote);
 
 						// Calculate backoff and wait
 						const delay = jitterBackoff(attempt, options.baseDelayMs, options.maxDelayMs);
@@ -128,12 +141,12 @@ type NamespaceMethod = 'get' | 'idFromName' | 'idFromString';
  */
 export function withRetry<T extends Rpc.DurableObjectBranded>(
 	namespace: DurableObjectNamespace<T>,
-	options?: RetryOptions
+	options?: RetryOptions,
 ): DurableObjectNamespace<T> {
 	const opts = {
 		...DEFAULT_OPTIONS,
 		...options,
-		isRetryable: options?.isRetryable ?? isErrorRetryable,
+		isRetryable: options?.isRetryable,
 	};
 
 	return new Proxy(namespace, {

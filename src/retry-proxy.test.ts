@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { withRetry, isErrorRetryable } from './retry-proxy';
+import { withRetry } from './retry-proxy';
 
 function createRetryableError(message: string): Error & { retryable: boolean } {
 	const error = new Error(message) as Error & { retryable: boolean };
@@ -20,25 +20,6 @@ function createNonRetryableError(message: string): Error {
 
 // Use minimal delays so tests complete quickly while still exercising real scheduler.wait()
 const FAST_RETRY = { baseDelayMs: 1, maxDelayMs: 10 };
-
-describe('isErrorRetryable', () => {
-	it('returns true for errors with retryable=true', () => {
-		expect(isErrorRetryable(createRetryableError('transient'))).toBe(true);
-	});
-
-	it('returns false for errors without retryable property', () => {
-		expect(isErrorRetryable(createNonRetryableError('fatal'))).toBe(false);
-	});
-
-	it('returns false for overloaded errors', () => {
-		expect(isErrorRetryable(createOverloadedError('overloaded'))).toBe(false);
-	});
-
-	it('returns false for errors with overload message', () => {
-		const error = createRetryableError('Durable Object is overloaded');
-		expect(isErrorRetryable(error)).toBe(false);
-	});
-});
 
 describe('withRetry', () => {
 	let mockMethod: ReturnType<typeof vi.fn>;
@@ -187,19 +168,34 @@ describe('withRetry', () => {
 		expect(namespace.newUniqueId).toHaveBeenCalled();
 	});
 
-	it('supports custom isRetryable function', async () => {
+	it('supports custom isRetryable function for application errors', async () => {
 		const namespace = createMockNamespace();
-		const customRetryable = vi.fn().mockReturnValue(false);
+		const customRetryable = vi.fn().mockReturnValue(true);
 		const wrapped = withRetry(namespace, { isRetryable: customRetryable, ...FAST_RETRY });
 
-		const error = createRetryableError('should-not-retry');
-		mockMethod.mockRejectedValue(error);
+		// Error that is NOT retryable by infrastructure rules (no .retryable property)
+		const error = createNonRetryableError('app-error');
+		mockMethod.mockRejectedValueOnce(error).mockResolvedValue('success');
 
 		const stub = wrapped.getByName('test') as any;
 
-		await expect(stub.testMethod()).rejects.toThrow('should-not-retry');
+		const result = await stub.testMethod();
+		expect(result).toBe('success');
 		expect(customRetryable).toHaveBeenCalledWith(error);
-		expect(mockMethod).toHaveBeenCalledTimes(1);
+		expect(mockMethod).toHaveBeenCalledTimes(2);
+	});
+
+	it('automatically retries infrastructure errors without custom predicate', async () => {
+		const namespace = createMockNamespace();
+		const wrapped = withRetry(namespace, FAST_RETRY);
+
+		mockMethod.mockRejectedValueOnce(createRetryableError('infra-fail')).mockResolvedValue('success');
+
+		const stub = wrapped.getByName('test') as any;
+		const result = await stub.testMethod();
+
+		expect(result).toBe('success');
+		expect(mockMethod).toHaveBeenCalledTimes(2);
 	});
 
 	it('retries up to maxAttempts with backoff', async () => {
