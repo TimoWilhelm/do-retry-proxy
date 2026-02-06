@@ -75,13 +75,12 @@ function createStubProxy<T extends Rpc.DurableObjectBranded>(
 			return async (...args: unknown[]) => {
 				let attempt = 1;
 				let lastError: unknown;
-				let useSameStub = true;
+				let currentStub = target;
 
 				while (attempt <= options.maxAttempts) {
 					try {
-						// Get a fresh stub if needed, otherwise reuse
-						// On attempt 1, 'target' is the initial stub.
-						const currentStub = useSameStub ? target : getStub();
+						// On the first attempt, we use the initial stub (target).
+						// On subsequent attempts, currentStub is updated to a fresh stub.
 						return await (currentStub as Record<string, (...a: unknown[]) => unknown>)[prop](...args);
 					} catch (err) {
 						lastError = err;
@@ -100,14 +99,13 @@ function createStubProxy<T extends Rpc.DurableObjectBranded>(
 
 						// Check if we've exhausted attempts
 						if (attempt >= options.maxAttempts) {
-							throw err;
+							break;
 						}
 
-						// Determine if we can reuse the stub for the next attempt
-						// If the error was remote (application error), the stub is likely healthy.
-						// If it was infrastructure/network, assume broken and recreate.
-						const isRemote = (err as any)?.remote;
-						useSameStub = Boolean(isRemote);
+						// Always create a fresh stub for the next attempt.
+						// Many exceptions leave the stub in a "broken" state.
+						// Even for application errors (.remote = true), it is safer and cheap to recreate.
+						currentStub = getStub();
 
 						// Calculate backoff and wait
 						const delay = jitterBackoff(attempt, options.baseDelayMs, options.maxDelayMs);
@@ -122,8 +120,6 @@ function createStubProxy<T extends Rpc.DurableObjectBranded>(
 		},
 	});
 }
-
-type NamespaceMethod = 'get' | 'idFromName' | 'idFromString';
 
 /**
  * Wraps a DurableObjectNamespace with automatic retry capabilities.

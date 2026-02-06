@@ -35,10 +35,6 @@ export class MyDurableObject extends DurableObject<Env> {
 	}
 }
 
-export interface Env {
-	MY_DURABLE_OBJECT: DurableObjectNamespace;
-}
-
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const doNamespace = withRetry(ctx.exports.MyDurableObject, {
