@@ -62,7 +62,7 @@ function createStubProxy<T extends Rpc.DurableObjectBranded>(
 
 	return new Proxy(stub, {
 		get(target, prop, receiver) {
-			const value = Reflect.get(target, prop, receiver);
+			const value = Reflect.get(target, prop, target);
 
 			// Only intercept function calls (RPC methods)
 			if (typeof value !== 'function') {
@@ -82,8 +82,7 @@ function createStubProxy<T extends Rpc.DurableObjectBranded>(
 					try {
 						// Get a fresh stub for each attempt (critical for broken stub recovery)
 						const currentStub = attempt === 1 ? target : getStub();
-						const method = Reflect.get(currentStub, prop, currentStub) as (...args: unknown[]) => unknown;
-						return await method.apply(currentStub, args);
+						return await (currentStub as Record<string, (...a: unknown[]) => unknown>)[prop](...args);
 					} catch (err) {
 						lastError = err;
 
