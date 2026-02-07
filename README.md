@@ -7,7 +7,7 @@ Transparent retry proxy for Cloudflare Durable Objects. Wraps a `DurableObjectNa
 ```ts
 import { withRetry } from './retry-proxy';
 
-const namespace = withRetry(env.MY_DURABLE_OBJECT);
+const namespace = withRetry(ctx.exports.MyDurableObject);
 const stub = namespace.getByName('foo');
 
 // Automatically retries on transient failures
@@ -17,7 +17,7 @@ const result = await stub.sayHello('world');
 ### Options
 
 ```ts
-const namespace = withRetry(env.MY_DURABLE_OBJECT, {
+const namespace = withRetry(ctx.exports.MyDurableObject, {
   maxAttempts: 3,    // default: 3
   baseDelayMs: 100,  // default: 100
   maxDelayMs: 3000,  // default: 3000

@@ -130,7 +130,7 @@ function createStubProxy<T extends Rpc.DurableObjectBranded>(
  *
  * @example
  * ```ts
- * const namespace = withRetry(env.MY_DURABLE_OBJECT);
+ * const namespace = withRetry(ctx.exports.MyDurableObject);
  * const stub = namespace.get(id);
  * const result = await stub.someMethod(); // Automatically retries on failure
  * ```
