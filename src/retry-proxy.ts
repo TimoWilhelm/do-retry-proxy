@@ -46,7 +46,7 @@ function isObjectWithProperties(value: unknown): value is Record<string, unknown
  * - `.retryable` must be true
  * - `.overloaded` must NOT be true (retrying would worsen the overload)
  */
-export function isErrorRetryable(error: unknown): boolean {
+function isErrorRetryable(error: unknown): boolean {
 	if (!isObjectWithProperties(error)) {
 		return false;
 	}
@@ -78,7 +78,7 @@ function callMethod(object: object, property: string | symbol, arguments_: unkno
 type StubGetter<T extends Rpc.DurableObjectBranded> = () => DurableObjectStub<T>;
 
 type ResolvedOptions = Required<Omit<RetryOptions, 'isRetryable'>> & {
-	isRetryable: (error: unknown) => boolean;
+	isRetryable?: (error: unknown) => boolean;
 };
 
 /** Non-function properties on DurableObjectStub read directly (no wrapping). */
@@ -123,8 +123,10 @@ function createStubProxy<T extends Rpc.DurableObjectBranded>(getStub: StubGetter
 						const currentStub = attempt === 1 ? target : getStub();
 						return await callMethod(currentStub, property, arguments_);
 					} catch (error) {
-						// Check if we should retry
-						if (!options.isRetryable(error)) {
+						// Check if we should retry:
+						// 1. Always retry infrastructure errors (unless overloaded)
+						// 2. Check custom predicate if provided
+						if (!isErrorRetryable(error) && !(options.isRetryable?.(error))) {
 							throw error;
 						}
 
@@ -132,11 +134,6 @@ function createStubProxy<T extends Rpc.DurableObjectBranded>(getStub: StubGetter
 						if (attempt >= options.maxAttempts) {
 							throw error;
 						}
-
-						// Always create a fresh stub for the next attempt.
-						// Many exceptions leave the stub in a "broken" state.
-						// Even for application errors (.remote = true), it is safer and cheap to recreate.
-						currentStub = getStub();
 
 						// Calculate backoff and wait
 						const delay = jitterBackoff(attempt, options.baseDelayMs, options.maxDelayMs);
@@ -171,7 +168,7 @@ export function withRetry<T extends Rpc.DurableObjectBranded>(
 	const resolvedOptions: ResolvedOptions = {
 		...DEFAULT_OPTIONS,
 		...options,
-		isRetryable: options?.isRetryable,
+		maxAttempts: Math.max(1, options?.maxAttempts ?? DEFAULT_OPTIONS.maxAttempts),
 	};
 
 	return new Proxy(namespace, {
